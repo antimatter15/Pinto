@@ -1,0 +1,580 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>nRF52 Camera</title>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                max-width: 800px;
+                margin: 0 auto;
+                padding: 20px;
+                background-color: #f5f5f5;
+            }
+            .container {
+                background: white;
+                border-radius: 10px;
+                padding: 20px;
+                box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            }
+            h1 {
+                text-align: center;
+                color: #333;
+            }
+            .status {
+                padding: 10px;
+                margin: 10px 0;
+                border-radius: 5px;
+                font-weight: bold;
+            }
+            .status.disconnected {
+                background-color: #ffe6e6;
+                color: #d00;
+                border: 1px solid #ffcccc;
+            }
+            .status.connected {
+                background-color: #e6ffe6;
+                color: #0a0;
+                border: 1px solid #ccffcc;
+            }
+            .controls {
+                text-align: center;
+                margin: 20px 0;
+            }
+            button {
+                background-color: #007bff;
+                color: white;
+                border: none;
+                padding: 12px 24px;
+                margin: 5px;
+                border-radius: 5px;
+                cursor: pointer;
+                font-size: 16px;
+            }
+            button:hover {
+                background-color: #0056b3;
+            }
+            button:disabled {
+                background-color: #cccccc;
+                cursor: not-allowed;
+            }
+            #imageDisplay {
+                text-align: center;
+                margin-top: 20px;
+            }
+            #capturedImage {
+                max-width: 100%;
+                border: 2px solid #ddd;
+                border-radius: 5px;
+            }
+            .log {
+                background-color: #f8f9fa;
+                border: 1px solid #dee2e6;
+                border-radius: 5px;
+                padding: 10px;
+                margin-top: 20px;
+                height: 200px;
+                overflow-y: auto;
+                font-family: monospace;
+                font-size: 12px;
+            }
+            .stats {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                gap: 10px;
+                margin: 20px 0;
+            }
+            .stat-box {
+                background-color: #f8f9fa;
+                padding: 15px;
+                border-radius: 5px;
+                text-align: center;
+                border: 1px solid #dee2e6;
+            }
+            .stat-value {
+                font-size: 24px;
+                font-weight: bold;
+                color: #007bff;
+            }
+            .stat-label {
+                font-size: 14px;
+                color: #666;
+                margin-top: 5px;
+            }
+            .image-gallery {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+                gap: 10px;
+                margin: 20px 0;
+            }
+            .gallery-item {
+                text-align: center;
+                background-color: #f8f9fa;
+                border: 1px solid #dee2e6;
+                border-radius: 5px;
+                padding: 10px;
+            }
+            .gallery-item img {
+                width: 100%;
+                height: 100px;
+                object-fit: cover;
+                border-radius: 3px;
+                cursor: pointer;
+            }
+            .gallery-item .timestamp {
+                font-size: 10px;
+                color: #666;
+                margin-top: 5px;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>nRF52 Camera Controller</h1>
+
+            <div id="status" class="status disconnected">
+                Status: Disconnected
+            </div>
+
+            <div class="controls">
+                <button id="connectBtn">Connect to Camera</button>
+                <button id="takePictureBtn" disabled>Take Picture</button>
+            </div>
+
+            <div class="stats">
+                <div class="stat-box">
+                    <div class="stat-value" id="imagesReceived">0</div>
+                    <div class="stat-label">Images Received</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-value" id="bytesReceived">0</div>
+                    <div class="stat-label">Bytes Received</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-value" id="transferRate">0</div>
+                    <div class="stat-label">KB/s</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-value" id="transmissionTime">-</div>
+                    <div class="stat-label">Last Transmission (ms)</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-value" id="lastImageSize">-</div>
+                    <div class="stat-label">Last Image Size</div>
+                </div>
+            </div>
+
+            <div id="imageDisplay">
+                <h3>Latest Image:</h3>
+                <img
+                    id="capturedImage"
+                    style="
+                        display: none;
+                        max-width: 100%;
+                        border: 2px solid #ddd;
+                        border-radius: 5px;
+                    "
+                    alt="Captured image will appear here"
+                />
+                <div
+                    id="noImageText"
+                    style="padding: 40px; color: #666; text-align: center"
+                >
+                    No images received yet...
+                </div>
+            </div>
+
+            <div class="data-display">
+                <h3>Image Gallery (All images):</h3>
+                <div id="imageGallery" class="image-gallery">
+                    <!-- Images will be added here -->
+                </div>
+            </div>
+
+            <div id="log" class="log">
+                <div>Ready to connect...</div>
+            </div>
+        </div>
+
+        <script>
+            let device = null;
+            let characteristic = null;
+            let imageData = new Uint8Array();
+            let imagesReceived = 0;
+            let bytesReceived = 0;
+            let startTime = null;
+            let imageStartTime = null;
+            let imageGallery = [];
+            let lastImageSize = 0;
+            let imageTimeout = null;
+
+            const statusDiv = document.getElementById("status");
+            const connectBtn = document.getElementById("connectBtn");
+            const takePictureBtn = document.getElementById("takePictureBtn");
+            const capturedImage = document.getElementById("capturedImage");
+            const logDiv = document.getElementById("log");
+
+            function log(message) {
+                const timestamp = new Date().toLocaleTimeString();
+                logDiv.innerHTML += `<div>[${timestamp}] ${message}</div>`;
+                logDiv.scrollTop = logDiv.scrollHeight;
+            }
+
+            function updateStats() {
+                document.getElementById("imagesReceived").textContent =
+                    imagesReceived;
+                document.getElementById("bytesReceived").textContent =
+                    bytesReceived.toLocaleString();
+
+                if (startTime && bytesReceived > 0) {
+                    const elapsed = (Date.now() - startTime) / 1000;
+                    const rate = (bytesReceived / 1024 / elapsed).toFixed(2);
+                    document.getElementById("transferRate").textContent = rate;
+                }
+
+                if (lastImageSize > 0) {
+                    const sizeKB = (lastImageSize / 1024).toFixed(1);
+                    document.getElementById("lastImageSize").textContent =
+                        `${sizeKB} KB`;
+                }
+            }
+
+            function findJPEGStart(data, startIndex = 0) {
+                for (let i = startIndex; i < data.length - 1; i++) {
+                    if (data[i] === 0xff && data[i + 1] === 0xd8) {
+                        return i;
+                    }
+                }
+                return -1;
+            }
+
+            function findJPEGEnd(data, startIndex = 0) {
+                for (let i = startIndex; i < data.length - 1; i++) {
+                    if (data[i] === 0xff && data[i + 1] === 0xd9) {
+                        return i + 2; // Include the end marker
+                    }
+                }
+                return -1;
+            }
+
+            function isValidJPEG(data) {
+                if (data.length < 10) return false;
+
+                // Must start with JPEG marker
+                if (data[0] !== 0xff || data[1] !== 0xd8) return false;
+
+                // Must end with JPEG marker
+                if (
+                    data[data.length - 2] !== 0xff ||
+                    data[data.length - 1] !== 0xd9
+                )
+                    return false;
+
+                // Look for at least one valid JPEG segment after SOI
+                for (let i = 2; i < Math.min(data.length - 1, 50); i++) {
+                    if (
+                        data[i] === 0xff &&
+                        data[i + 1] >= 0xe0 &&
+                        data[i + 1] <= 0xef
+                    ) {
+                        return true; // Found APP segment
+                    }
+                    if (
+                        data[i] === 0xff &&
+                        (data[i + 1] === 0xdb ||
+                            data[i + 1] === 0xc0 ||
+                            data[i + 1] === 0xc4)
+                    ) {
+                        return true; // Found DQT, SOF, or DHT
+                    }
+                }
+
+                return false;
+            }
+
+            function resetImageBuffer() {
+                if (imageTimeout) {
+                    clearTimeout(imageTimeout);
+                    imageTimeout = null;
+                }
+                imageData = new Uint8Array();
+                imageStartTime = null;
+            }
+
+            function addToGallery(imageUrl) {
+                const gallery = document.getElementById("imageGallery");
+                const timestamp = new Date();
+
+                const galleryItem = document.createElement("div");
+                galleryItem.className = "gallery-item";
+
+                const img = document.createElement("img");
+                img.src = imageUrl;
+                img.onclick = () => {
+                    const capturedImage =
+                        document.getElementById("capturedImage");
+                    capturedImage.src = imageUrl;
+                    capturedImage.style.display = "block";
+                    document.getElementById("noImageText").style.display =
+                        "none";
+                };
+
+                const timeLabel = document.createElement("div");
+                timeLabel.className = "timestamp";
+                timeLabel.textContent = timestamp.toLocaleTimeString();
+
+                galleryItem.appendChild(img);
+                galleryItem.appendChild(timeLabel);
+
+                gallery.insertBefore(galleryItem, gallery.firstChild);
+
+                imageGallery.push({
+                    url: imageUrl,
+                    element: galleryItem,
+                    timestamp,
+                });
+            }
+
+            function updateStatus(message, connected = false) {
+                statusDiv.textContent = `Status: ${message}`;
+                statusDiv.className = `status ${connected ? "connected" : "disconnected"}`;
+                connectBtn.textContent = connected
+                    ? "Disconnect"
+                    : "Connect to Camera";
+                takePictureBtn.disabled = !connected;
+            }
+
+            async function connectToDevice() {
+                try {
+                    log("Requesting Bluetooth device...");
+                    device = await navigator.bluetooth.requestDevice({
+                        filters: [{ name: "XIAO_nRF52840_CAM" }],
+                        optionalServices: [
+                            "6e400001-b5a3-f393-e0a9-e50e24dcca9e",
+                        ],
+                    });
+
+                    log(`Connecting to ${device.name}...`);
+                    const server = await device.gatt.connect();
+
+                    log("Getting UART service...");
+                    const service = await server.getPrimaryService(
+                        "6e400001-b5a3-f393-e0a9-e50e24dcca9e",
+                    );
+
+                    log("Getting TX characteristic...");
+                    characteristic = await service.getCharacteristic(
+                        "6e400003-b5a3-f393-e0a9-e50e24dcca9e",
+                    );
+
+                    log("Starting notifications...");
+                    await characteristic.startNotifications();
+                    characteristic.addEventListener(
+                        "characteristicvaluechanged",
+                        handleNotification,
+                    );
+
+                    device.addEventListener(
+                        "gattserverdisconnected",
+                        onDisconnected,
+                    );
+
+                    updateStatus("Connected", true);
+                    log("Successfully connected to camera!");
+                    startTime = Date.now();
+                } catch (error) {
+                    log(`Connection failed: ${error.message}`);
+                    updateStatus("Connection failed");
+                }
+            }
+
+            function onDisconnected() {
+                log("Device disconnected");
+                updateStatus("Disconnected");
+                device = null;
+                characteristic = null;
+                resetImageBuffer();
+                startTime = null;
+                lastImageSize = 0;
+            }
+
+            async function disconnect() {
+                if (device && device.gatt.connected) {
+                    await device.gatt.disconnect();
+                }
+            }
+
+            function handleNotification(event) {
+                const data = new Uint8Array(event.target.value.buffer);
+                bytesReceived += data.length;
+
+                // Look for JPEG start in this packet
+                const jpegStartIndex = findJPEGStart(data);
+
+                if (jpegStartIndex !== -1) {
+                    // Found JPEG start - reset and begin new image
+                    resetImageBuffer();
+
+                    // Extract the JPEG data starting from the marker
+                    const jpegData = data.slice(jpegStartIndex);
+                    imageData = new Uint8Array(jpegData);
+                    imageStartTime = Date.now();
+
+                    log(
+                        `New JPEG started at offset ${jpegStartIndex}, ${jpegData.length} bytes`,
+                    );
+
+                    // Set timeout for incomplete images
+                    imageTimeout = setTimeout(() => {
+                        log("Image timeout - resetting buffer");
+                        resetImageBuffer();
+                    }, 15000);
+                } else if (imageStartTime !== null && imageData.length > 0) {
+                    // Continue building current image
+                    const newImageData = new Uint8Array(
+                        imageData.length + data.length,
+                    );
+                    newImageData.set(imageData);
+                    newImageData.set(data, imageData.length);
+                    imageData = newImageData;
+                } else {
+                    // No active image and no start marker - ignore
+                    log(`Ignoring ${data.length} bytes (no active image)`);
+                    updateStats();
+                    return;
+                }
+
+                // Check for JPEG end marker
+                const jpegEndIndex = findJPEGEnd(imageData);
+                if (jpegEndIndex !== -1) {
+                    // Extract complete JPEG
+                    const completeJPEG = imageData.slice(0, jpegEndIndex);
+
+                    clearTimeout(imageTimeout);
+                    imageTimeout = null;
+
+                    const transmissionTime = Date.now() - imageStartTime;
+
+                    log(
+                        `JPEG end found at ${jpegEndIndex}, total size: ${completeJPEG.length} bytes`,
+                    );
+
+                    // Validate the complete JPEG
+                    if (isValidJPEG(completeJPEG)) {
+                        imagesReceived++;
+                        lastImageSize = completeJPEG.length;
+
+                        log(
+                            `Valid JPEG received: ${completeJPEG.length} bytes (Image #${imagesReceived}, ${transmissionTime}ms)`,
+                        );
+                        document.getElementById(
+                            "transmissionTime",
+                        ).textContent = transmissionTime;
+
+                        bufferToDataURL(completeJPEG).then((url) => {
+                            capturedImage.src = url;
+                            capturedImage.style.display = "block";
+                            document.getElementById(
+                                "noImageText",
+                            ).style.display = "none";
+
+                            addToGallery(url);
+
+                            log(
+                                `Image displayed (${completeJPEG.length} bytes)`,
+                            );
+                        });
+                    } else {
+                        log(
+                            `Corrupt JPEG detected (${completeJPEG.length} bytes) - discarding`,
+                        );
+                    }
+
+                    // Check if there's more data after this JPEG (next image start)
+                    if (jpegEndIndex < imageData.length) {
+                        const remainingData = imageData.slice(jpegEndIndex);
+                        resetImageBuffer();
+
+                        // Process remaining data recursively
+                        const fakeEvent = {
+                            target: {
+                                value: {
+                                    buffer: remainingData.buffer.slice(
+                                        remainingData.byteOffset,
+                                        remainingData.byteOffset +
+                                            remainingData.byteLength,
+                                    ),
+                                },
+                            },
+                        };
+                        bytesReceived -= remainingData.length; // Don't double count
+                        handleNotification(fakeEvent);
+                        return;
+                    } else {
+                        resetImageBuffer();
+                    }
+                }
+
+                // Safety check for oversized buffers
+                if (imageData.length > 1000000) {
+                    log(
+                        `Buffer too large (${imageData.length} bytes) - resetting`,
+                    );
+                    resetImageBuffer();
+                }
+
+                updateStats();
+            }
+            async function bufferToDataURL(buffer) {
+                return await new Promise((r) => {
+                    const reader = new FileReader();
+                    reader.onload = () => r(reader.result);
+                    reader.readAsDataURL(new Blob([buffer]));
+                });
+            }
+
+            async function takePicture() {
+                if (!characteristic) {
+                    log("Error: Not connected to device");
+                    return;
+                }
+
+                try {
+                    log("Sending take picture command...");
+                    resetImageBuffer(); // Reset image data properly
+
+                    // Send 'P' command to trigger picture capture
+                    const command = new TextEncoder().encode("P");
+                    const rxCharacteristic =
+                        await characteristic.service.getCharacteristic(
+                            "6e400002-b5a3-f393-e0a9-e50e24dcca9e",
+                        );
+                    await rxCharacteristic.writeValue(command);
+
+                    log("Picture command sent");
+                } catch (error) {
+                    log(`Failed to take picture: ${error.message}`);
+                }
+            }
+
+            // Event listeners
+            connectBtn.addEventListener("click", async () => {
+                if (device && device.gatt.connected) {
+                    await disconnect();
+                } else {
+                    await connectToDevice();
+                }
+            });
+
+            takePictureBtn.addEventListener("click", takePicture);
+
+            // Check if Web Bluetooth is supported
+            if (!navigator.bluetooth) {
+                log("Web Bluetooth is not supported in this browser");
+                updateStatus("Web Bluetooth not supported");
+                connectBtn.disabled = true;
+            }
+        </script>
+    </body>
+</html>

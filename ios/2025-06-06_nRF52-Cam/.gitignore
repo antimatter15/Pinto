@@ -1,0 +1,10 @@
+# Xcode per-user state
+xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
+*.ipa
+*.dSYM.zip
+
+# Local secrets (copy Secrets.swift.example -> nRF52 Cam/Secrets.swift)
+nRF52 Cam/Secrets.swift

@@ -1,0 +1,497 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>XIAO nRF52840 BLE Camera Receiver</title>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                max-width: 800px;
+                margin: 0 auto;
+                padding: 20px;
+                background-color: #f5f5f5;
+            }
+            .container {
+                background: white;
+                padding: 20px;
+                border-radius: 8px;
+                box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            }
+            h1 {
+                color: #333;
+                text-align: center;
+            }
+            .controls {
+                text-align: center;
+                margin: 20px 0;
+            }
+            button {
+                background-color: #007bff;
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                font-size: 16px;
+                border-radius: 4px;
+                cursor: pointer;
+                margin: 5px;
+            }
+            button:hover {
+                background-color: #0056b3;
+            }
+            button:disabled {
+                background-color: #ccc;
+                cursor: not-allowed;
+            }
+            .status {
+                text-align: center;
+                margin: 10px 0;
+                padding: 10px;
+                border-radius: 4px;
+            }
+            .status.connected {
+                background-color: #d4edda;
+                color: #155724;
+                border: 1px solid #c3e6cb;
+            }
+            .status.disconnected {
+                background-color: #f8d7da;
+                color: #721c24;
+                border: 1px solid #f5c6cb;
+            }
+            .stats {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                gap: 10px;
+                margin: 20px 0;
+            }
+            .stat-box {
+                background-color: #f8f9fa;
+                padding: 15px;
+                border-radius: 4px;
+                text-align: center;
+            }
+            .stat-value {
+                font-size: 24px;
+                font-weight: bold;
+                color: #007bff;
+            }
+            .stat-label {
+                font-size: 14px;
+                color: #666;
+            }
+            .data-display {
+                margin-top: 20px;
+            }
+            .data-preview {
+                background-color: #f8f9fa;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                padding: 10px;
+                max-height: 200px;
+                overflow-y: auto;
+                font-family: monospace;
+                font-size: 12px;
+            }
+            .log {
+                background-color: #f1f3f4;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                padding: 10px;
+                max-height: 150px;
+                overflow-y: auto;
+                font-family: monospace;
+                font-size: 12px;
+                margin-top: 10px;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>XIAO nRF52840 BLE Camera Receiver</h1>
+
+            <div class="controls">
+                <button id="connectBtn">Connect to Device</button>
+                <button id="disconnectBtn" disabled>Disconnect</button>
+            </div>
+
+            <div id="status" class="status disconnected">Not Connected</div>
+
+            <div class="stats">
+                <div class="stat-box">
+                    <div class="stat-value" id="imagesReceived">0</div>
+                    <div class="stat-label">Images Received</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-value" id="bytesReceived">0</div>
+                    <div class="stat-label">Bytes Received</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-value" id="transferRate">0</div>
+                    <div class="stat-label">KB/s</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-value" id="lastImageTime">-</div>
+                    <div class="stat-label">Last Image</div>
+                </div>
+            </div>
+
+            <div class="data-display">
+                <h3>Latest Image:</h3>
+                <div
+                    id="imageContainer"
+                    style="text-align: center; margin: 20px 0"
+                >
+                    <img
+                        id="latestImage"
+                        style="
+                            max-width: 100%;
+                            max-height: 400px;
+                            border: 1px solid #ddd;
+                            border-radius: 4px;
+                            display: none;
+                        "
+                        alt="Latest camera image"
+                    />
+                    <div id="noImageText" style="padding: 40px; color: #666">
+                        No images received yet...
+                    </div>
+                </div>
+            </div>
+
+            <div class="data-display">
+                <h3>Image Gallery (Last 5 images):</h3>
+                <div
+                    id="imageGallery"
+                    style="
+                        display: grid;
+                        grid-template-columns: repeat(
+                            auto-fit,
+                            minmax(150px, 1fr)
+                        );
+                        gap: 10px;
+                        margin: 20px 0;
+                    "
+                >
+                    <!-- Images will be added here -->
+                </div>
+            </div>
+
+            <div class="data-display">
+                <h3>Connection Log:</h3>
+                <div id="log" class="log"></div>
+            </div>
+        </div>
+
+        <script>
+            class BLECameraReceiver {
+                constructor() {
+                    this.device = null;
+                    this.server = null;
+                    this.service = null;
+                    this.characteristic = null;
+                    this.isConnected = false;
+
+                    this.imagesReceived = 0;
+                    this.bytesReceived = 0;
+                    this.lastImageTime = null;
+                    this.startTime = null;
+                    this.imageBuffer = new Uint8Array(0);
+                    this.imageGallery = [];
+                    this.maxGallerySize = 5;
+
+                    this.initializeUI();
+                }
+
+                initializeUI() {
+                    document
+                        .getElementById("connectBtn")
+                        .addEventListener("click", () => this.connect());
+                    document
+                        .getElementById("disconnectBtn")
+                        .addEventListener("click", () => this.disconnect());
+                }
+
+                log(message) {
+                    const logElement = document.getElementById("log");
+                    const timestamp = new Date().toLocaleTimeString();
+                    logElement.innerHTML += `[${timestamp}] ${message}<br>`;
+                    logElement.scrollTop = logElement.scrollHeight;
+                    console.log(message);
+                }
+
+                updateStatus(message, connected = false) {
+                    const statusElement = document.getElementById("status");
+                    statusElement.textContent = message;
+                    statusElement.className = `status ${connected ? "connected" : "disconnected"}`;
+
+                    document.getElementById("connectBtn").disabled = connected;
+                    document.getElementById("disconnectBtn").disabled =
+                        !connected;
+                }
+
+                updateStats() {
+                    document.getElementById("imagesReceived").textContent =
+                        this.imagesReceived;
+                    document.getElementById("bytesReceived").textContent =
+                        this.bytesReceived.toLocaleString();
+
+                    if (this.startTime && this.bytesReceived > 0) {
+                        const elapsed = (Date.now() - this.startTime) / 1000;
+                        const rate = (
+                            this.bytesReceived /
+                            1024 /
+                            elapsed
+                        ).toFixed(2);
+                        document.getElementById("transferRate").textContent =
+                            rate;
+                    }
+
+                    if (this.lastImageTime) {
+                        document.getElementById("lastImageTime").textContent =
+                            this.lastImageTime.toLocaleTimeString();
+                    }
+                }
+
+                isJPEGComplete(buffer) {
+                    console.log(buffer);
+                    if (buffer.length < 2) return false;
+
+                    // Check for JPEG start marker (0xFFD8)
+                    if (buffer[0] !== 0xff || buffer[1] !== 0xd8) return false;
+
+                    // Look for JPEG end marker (0xFFD9)
+                    for (let i = buffer.length - 2; i >= 0; i--) {
+                        if (buffer[i] === 0xff && buffer[i + 1] === 0xd9) {
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+
+                displayImage(imageData) {
+                    const blob = new Blob([imageData], { type: "image/jpeg" });
+                    const imageUrl = URL.createObjectURL(blob);
+
+                    // Update latest image
+                    const latestImage = document.getElementById("latestImage");
+                    const noImageText = document.getElementById("noImageText");
+
+                    latestImage.src = imageUrl;
+                    latestImage.style.display = "block";
+                    noImageText.style.display = "none";
+
+                    // Add to gallery
+                    this.addToGallery(imageUrl);
+
+                    // Clean up old URLs to prevent memory leaks
+                    latestImage.onload = () => {
+                        if (this.imageGallery.length > this.maxGallerySize) {
+                            const oldUrl = this.imageGallery.shift();
+                            URL.revokeObjectURL(oldUrl.url);
+                        }
+                    };
+                }
+
+                addToGallery(imageUrl) {
+                    const gallery = document.getElementById("imageGallery");
+                    const timestamp = new Date();
+
+                    // Create image element for gallery
+                    const imgContainer = document.createElement("div");
+                    imgContainer.style.textAlign = "center";
+
+                    const img = document.createElement("img");
+                    img.src = imageUrl;
+                    img.style.width = "100%";
+                    img.style.height = "100px";
+                    img.style.objectFit = "cover";
+                    img.style.border = "1px solid #ddd";
+                    img.style.borderRadius = "4px";
+                    img.style.cursor = "pointer";
+
+                    const timeLabel = document.createElement("div");
+                    timeLabel.textContent = timestamp.toLocaleTimeString();
+                    timeLabel.style.fontSize = "10px";
+                    timeLabel.style.color = "#666";
+                    timeLabel.style.marginTop = "4px";
+
+                    imgContainer.appendChild(img);
+                    imgContainer.appendChild(timeLabel);
+
+                    // Click to view full size
+                    img.onclick = () => {
+                        const latestImage =
+                            document.getElementById("latestImage");
+                        latestImage.src = imageUrl;
+                    };
+
+                    // Add to beginning of gallery
+                    gallery.insertBefore(imgContainer, gallery.firstChild);
+
+                    // Keep track for cleanup
+                    this.imageGallery.push({
+                        url: imageUrl,
+                        element: imgContainer,
+                        timestamp,
+                    });
+
+                    // Remove excess images
+                    while (this.imageGallery.length > this.maxGallerySize) {
+                        const old = this.imageGallery.shift();
+                        URL.revokeObjectURL(old.url);
+                        if (old.element.parentNode) {
+                            old.element.parentNode.removeChild(old.element);
+                        }
+                    }
+                }
+
+                async connect() {
+                    try {
+                        if (!navigator.bluetooth) {
+                            throw new Error(
+                                "Web Bluetooth API is not available in this browser",
+                            );
+                        }
+
+                        this.log("Requesting Bluetooth device...");
+
+                        this.device = await navigator.bluetooth.requestDevice({
+                            filters: [
+                                { name: "XIAO_nRF52840_CAM" },
+                                {
+                                    services: [
+                                        "6e400001-b5a3-f393-e0a9-e50e24dcca9e",
+                                    ],
+                                },
+                            ],
+                            optionalServices: [
+                                "6e400001-b5a3-f393-e0a9-e50e24dcca9e",
+                            ],
+                        });
+
+                        this.device.addEventListener(
+                            "gattserverdisconnected",
+                            () => {
+                                this.handleDisconnection();
+                            },
+                        );
+
+                        this.log(`Connecting to device: ${this.device.name}`);
+                        this.server = await this.device.gatt.connect();
+
+                        this.log("Getting UART service...");
+                        this.service = await this.server.getPrimaryService(
+                            "6e400001-b5a3-f393-e0a9-e50e24dcca9e",
+                        );
+
+                        this.log("Getting TX characteristic...");
+                        this.characteristic =
+                            await this.service.getCharacteristic(
+                                "6e400003-b5a3-f393-e0a9-e50e24dcca9e",
+                            );
+
+                        this.log("Starting notifications...");
+                        await this.characteristic.startNotifications();
+
+                        this.characteristic.addEventListener(
+                            "characteristicvaluechanged",
+                            (event) => {
+                                this.handleDataReceived(event);
+                            },
+                        );
+
+                        this.isConnected = true;
+                        this.startTime = Date.now();
+                        this.updateStatus(
+                            `Connected to ${this.device.name}`,
+                            true,
+                        );
+                        this.log(
+                            "Successfully connected and ready to receive data!",
+                        );
+                    } catch (error) {
+                        this.log(`Connection failed: ${error.message}`);
+                        this.updateStatus("Connection failed", false);
+                    }
+                }
+
+                handleDataReceived(event) {
+                    const data = new Uint8Array(event.target.value.buffer);
+
+                    // Check if this is the start of a new JPEG (starts with 0xFFD8)
+                    if (
+                        data.length >= 2 &&
+                        data[0] === 0xff &&
+                        data[1] === 0xd8
+                    ) {
+                        // New JPEG started
+                        this.imageBuffer = new Uint8Array(data);
+                        this.log(`New JPEG started, ${data.length} bytes`);
+                    } else {
+                        // Continue accumulating data for current JPEG
+                        const newBuffer = new Uint8Array(
+                            this.imageBuffer.length + data.length,
+                        );
+                        newBuffer.set(this.imageBuffer);
+                        newBuffer.set(data, this.imageBuffer.length);
+                        this.imageBuffer = newBuffer;
+                    }
+
+                    this.bytesReceived += data.length;
+
+                    // Check if JPEG is complete
+                    if (this.isJPEGComplete(this.imageBuffer)) {
+                        this.imagesReceived++;
+                        this.lastImageTime = new Date();
+
+                        this.log(
+                            `Complete JPEG received: ${this.imageBuffer.length} bytes (Image #${this.imagesReceived})`,
+                        );
+
+                        // Display the image
+                        this.displayImage(this.imageBuffer);
+
+                        // Reset buffer for next image
+                        this.imageBuffer = new Uint8Array(0);
+                    }
+
+                    this.updateStats();
+                }
+
+                async disconnect() {
+                    try {
+                        if (this.characteristic) {
+                            await this.characteristic.stopNotifications();
+                        }
+                        if (this.device && this.device.gatt.connected) {
+                            await this.device.gatt.disconnect();
+                        }
+                        this.handleDisconnection();
+                    } catch (error) {
+                        this.log(`Disconnect error: ${error.message}`);
+                    }
+                }
+
+                handleDisconnection() {
+                    this.isConnected = false;
+                    this.device = null;
+                    this.server = null;
+                    this.service = null;
+                    this.characteristic = null;
+
+                    this.updateStatus("Disconnected", false);
+                    this.log("Device disconnected");
+                }
+            }
+
+            const bleReceiver = new BLECameraReceiver();
+
+            window.addEventListener("beforeunload", () => {
+                if (bleReceiver.isConnected) {
+                    bleReceiver.disconnect();
+                }
+            });
+        </script>
+    </body>
+</html>

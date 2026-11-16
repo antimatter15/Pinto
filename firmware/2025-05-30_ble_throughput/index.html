@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XIAO nRF52840 BLE Data Receiver</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        .controls {
+            text-align: center;
+            margin: 20px 0;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            font-size: 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        .status {
+            text-align: center;
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .status.connected {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .status.disconnected {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 10px;
+            margin: 20px 0;
+        }
+        .stat-box {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 4px;
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #007bff;
+        }
+        .stat-label {
+            font-size: 14px;
+            color: #666;
+        }
+        .data-display {
+            margin-top: 20px;
+        }
+        .data-preview {
+            background-color: #f8f9fa;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 10px;
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .log {
+            background-color: #f1f3f4;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 10px;
+            max-height: 150px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>XIAO nRF52840 BLE Data Receiver</h1>
+        
+        <div class="controls">
+            <button id="connectBtn">Connect to Device</button>
+            <button id="disconnectBtn" disabled>Disconnect</button>
+        </div>
+
+        <div id="status" class="status disconnected">
+            Not Connected
+        </div>
+
+        <div class="stats">
+            <div class="stat-box">
+                <div class="stat-value" id="packetsReceived">0</div>
+                <div class="stat-label">Packets Received</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value" id="bytesReceived">0</div>
+                <div class="stat-label">Bytes Received</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value" id="transferRate">0</div>
+                <div class="stat-label">KB/s</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value" id="lastPacketTime">-</div>
+                <div class="stat-label">Last Packet</div>
+            </div>
+        </div>
+
+        <div class="data-display">
+            <h3>Latest Data Preview (First 100 bytes):</h3>
+            <div id="dataPreview" class="data-preview">No data received yet...</div>
+        </div>
+
+        <div class="data-display">
+            <h3>Connection Log:</h3>
+            <div id="log" class="log"></div>
+        </div>
+    </div>
+
+    <script>
+        class BLEDataReceiver {
+            constructor() {
+                this.device = null;
+                this.server = null;
+                this.service = null;
+                this.characteristic = null;
+                this.isConnected = false;
+                
+                this.packetsReceived = 0;
+                this.bytesReceived = 0;
+                this.lastPacketTime = null;
+                this.startTime = null;
+                this.buffer = new Uint8Array(0);
+                
+                this.initializeUI();
+            }
+
+            initializeUI() {
+                document.getElementById('connectBtn').addEventListener('click', () => this.connect());
+                document.getElementById('disconnectBtn').addEventListener('click', () => this.disconnect());
+            }
+
+            log(message) {
+                const logElement = document.getElementById('log');
+                const timestamp = new Date().toLocaleTimeString();
+                logElement.innerHTML += `[${timestamp}] ${message}<br>`;
+                logElement.scrollTop = logElement.scrollHeight;
+                console.log(message);
+            }
+
+            updateStatus(message, connected = false) {
+                const statusElement = document.getElementById('status');
+                statusElement.textContent = message;
+                statusElement.className = `status ${connected ? 'connected' : 'disconnected'}`;
+                
+                document.getElementById('connectBtn').disabled = connected;
+                document.getElementById('disconnectBtn').disabled = !connected;
+            }
+
+            updateStats() {
+                document.getElementById('packetsReceived').textContent = this.packetsReceived;
+                document.getElementById('bytesReceived').textContent = this.bytesReceived.toLocaleString();
+                
+                if (this.startTime && this.bytesReceived > 0) {
+                    const elapsed = (Date.now() - this.startTime) / 1000;
+                    const rate = (this.bytesReceived / 1024 / elapsed).toFixed(2);
+                    document.getElementById('transferRate').textContent = rate;
+                }
+                
+                if (this.lastPacketTime) {
+                    document.getElementById('lastPacketTime').textContent = this.lastPacketTime.toLocaleTimeString();
+                }
+            }
+
+            updateDataPreview() {
+                const previewElement = document.getElementById('dataPreview');
+                if (this.buffer.length === 0) {
+                    previewElement.textContent = 'No data received yet...';
+                    return;
+                }
+
+                const preview = Array.from(this.buffer.slice(0, 100))
+                    .map((byte, index) => {
+                        const hex = byte.toString(16).padStart(2, '0');
+                        return (index % 16 === 0 ? '\n' : '') + hex + ' ';
+                    })
+                    .join('');
+                
+                previewElement.textContent = `Latest packet data (hex):${preview}`;
+            }
+
+            async connect() {
+                try {
+                    if (!navigator.bluetooth) {
+                        throw new Error('Web Bluetooth API is not available in this browser');
+                    }
+
+                    this.log('Requesting Bluetooth device...');
+                    
+                    this.device = await navigator.bluetooth.requestDevice({
+                        filters: [
+                            { name: 'XIAO_nRF52840' },
+                            { services: ['6e400001-b5a3-f393-e0a9-e50e24dcca9e'] }
+                        ],
+                        optionalServices: ['6e400001-b5a3-f393-e0a9-e50e24dcca9e']
+                    });
+
+                    this.device.addEventListener('gattserverdisconnected', () => {
+                        this.handleDisconnection();
+                    });
+
+                    this.log(`Connecting to device: ${this.device.name}`);
+                    this.server = await this.device.gatt.connect();
+                    
+                    this.log('Getting UART service...');
+                    this.service = await this.server.getPrimaryService('6e400001-b5a3-f393-e0a9-e50e24dcca9e');
+                    
+                    this.log('Getting TX characteristic...');
+                    this.characteristic = await this.service.getCharacteristic('6e400003-b5a3-f393-e0a9-e50e24dcca9e');
+                    
+                    this.log('Starting notifications...');
+                    await this.characteristic.startNotifications();
+                    
+                    this.characteristic.addEventListener('characteristicvaluechanged', (event) => {
+                        this.handleDataReceived(event);
+                    });
+
+                    this.isConnected = true;
+                    this.startTime = Date.now();
+                    this.updateStatus(`Connected to ${this.device.name}`, true);
+                    this.log('Successfully connected and ready to receive data!');
+
+                } catch (error) {
+                    this.log(`Connection failed: ${error.message}`);
+                    this.updateStatus('Connection failed', false);
+                }
+            }
+
+            handleDataReceived(event) {
+                const data = new Uint8Array(event.target.value.buffer);
+                
+                if (!this.lastPacketTime || Date.now() - this.lastPacketTime.getTime() > 1000) {
+                    this.packetsReceived++;
+                    this.buffer = new Uint8Array(data);
+                } else {
+                    const newBuffer = new Uint8Array(this.buffer.length + data.length);
+                    newBuffer.set(this.buffer);
+                    newBuffer.set(data, this.buffer.length);
+                    this.buffer = newBuffer;
+                }
+                
+                this.bytesReceived += data.length;
+                this.lastPacketTime = new Date();
+                
+                this.updateStats();
+                this.updateDataPreview();
+                
+                if (data.length > 0) {
+                    this.log(`Received ${data.length} bytes (Total: ${this.bytesReceived} bytes in ${this.packetsReceived} packets)`);
+                }
+            }
+
+            async disconnect() {
+                try {
+                    if (this.characteristic) {
+                        await this.characteristic.stopNotifications();
+                    }
+                    if (this.device && this.device.gatt.connected) {
+                        await this.device.gatt.disconnect();
+                    }
+                    this.handleDisconnection();
+                } catch (error) {
+                    this.log(`Disconnect error: ${error.message}`);
+                }
+            }
+
+            handleDisconnection() {
+                this.isConnected = false;
+                this.device = null;
+                this.server = null;
+                this.service = null;
+                this.characteristic = null;
+                
+                this.updateStatus('Disconnected', false);
+                this.log('Device disconnected');
+            }
+        }
+
+        const bleReceiver = new BLEDataReceiver();
+
+        window.addEventListener('beforeunload', () => {
+            if (bleReceiver.isConnected) {
+                bleReceiver.disconnect();
+            }
+        });
+    </script>
+</body>
+</html>
